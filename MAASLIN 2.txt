@@ -1,0 +1,640 @@
+# MAASLIN 2
+
+# FULL TAXONOMIC TABLE USED
+  # Core microbiome used ONLY for annotation
+  #
+  # Significance definition:
+  # q_value < 0.05 AND absolute effect size >= 1
+  # 0) Load required packages
+  library(readr)
+  library(dplyr)
+  library(tidyr)
+  library(stringr)
+  library(purrr)
+  library(Maaslin2)
+  library(ggplot2)
+  library(forcats)
+  
+   # 1) Set working directory
+   setwd("C:/Users/shiva/OneDrive/Desktop/G-INS-P/Panel")
+  
+  # 2) Create output directory
+  main_output_dir <- "C:/Users/shiva/OneDrive/Desktop/G-INS-P/Panel/Maaslin 2 May 20th effect size cut off"
+  
+  if (!dir.exists(main_output_dir)) {
+    dir.create(main_output_dir, recursive = TRUE)
+  }
+  
+  # 3) Read cleaned metadata
+  meta <- read_csv("metadata_clean.csv", show_col_types = FALSE) %>%
+    mutate(
+      sample_id  = str_trim(sample_id),
+      bioproject = str_trim(bioproject),
+      race       = str_trim(race),
+      
+      race = case_when(
+        str_to_lower(race) == "hispanic"  ~ "Hispanic",
+        str_to_lower(race) == "caucasian" ~ "Caucasian",
+        str_to_lower(race) == "african"   ~ "African",
+        str_to_lower(race) == "asian"     ~ "Asian",
+        TRUE ~ race
+      )
+    ) %>%
+    filter(race %in% c("Hispanic", "Caucasian", "African", "Asian")) %>%
+    dplyr::distinct(sample_id, .keep_all = TRUE)
+  
+  required_meta_cols <- c("sample_id", "bioproject", "race")
+  missing_meta_cols <- setdiff(required_meta_cols, colnames(meta))
+  
+  if (length(missing_meta_cols) > 0) {
+    stop(
+      "Missing required metadata columns: ",
+      paste(missing_meta_cols, collapse = ", ")
+    )
+  }
+  
+  # 4) Read abundance table
+  abund <- read_csv(
+    "Taxonomic_relative_abundance.csv",
+    show_col_types = FALSE
+  )
+  
+  if (!"Taxon" %in% colnames(abund)) {
+    stop("Column 'Taxon' not found in Taxonomic_relative_abundance.csv")
+  }
+  
+  # 5) Check duplicate taxa
+  dup_taxa <- abund$Taxon[duplicated(abund$Taxon)]
+  
+  cat("Number of duplicate taxa:", length(dup_taxa), "\n")
+  
+  if (length(dup_taxa) > 0) {
+    cat("Duplicate taxa found:\n")
+    print(unique(dup_taxa))
+    stop("Please resolve duplicate taxa before running MaAsLin2.")
+  }
+  
+  # 6) Convert abundance table to MaAsLin2 format
+  # Rows = taxa, Columns = sample IDs
+  abund_df <- as.data.frame(abund)
+  
+  rownames(abund_df) <- abund_df$Taxon
+  abund_df$Taxon <- NULL
+  
+  abund_df[] <- lapply(abund_df, as.numeric)
+  
+  # 7) Basic metadata checks
+  cat("\nSamples per race:\n")
+  print(table(meta$race))
+  
+  cat("\nSamples per BioProject:\n")
+  print(table(meta$bioproject))
+  
+  cat("\nRace distribution within BioProject:\n")
+  print(table(meta$bioproject, meta$race))
+  
+  # 8) Define pairwise comparisons
+  pairs <- tribble(
+    ~race1,       ~race2,
+    "Hispanic",   "Caucasian",
+    "Hispanic",   "African",
+    "Hispanic",   "Asian",
+    "Caucasian",  "African",
+    "Caucasian",  "Asian",
+    "African",    "Asian"
+  )
+  
+    # 9) Function to run MaAsLin2
+    run_pair <- function(race1, race2) {
+    
+    cat("\n=================================================\n")
+    cat("Running comparison:", race1, "vs", race2, "\n")
+    cat("Model: abundance ~ race + (1 | bioproject)\n")
+    cat("=================================================\n")
+    
+    meta_sub <- meta %>%
+      filter(race %in% c(race1, race2)) %>%
+      mutate(
+        race = factor(race, levels = c(race2, race1)),
+        bioproject = factor(bioproject)
+      )
+    
+    meta_df <- as.data.frame(meta_sub)
+    rownames(meta_df) <- meta_df$sample_id
+    
+    common_samples <- intersect(colnames(abund_df), rownames(meta_df))
+    
+    cat("Number of overlapping samples:", length(common_samples), "\n")
+    
+    if (length(common_samples) < 10) {
+      warning(
+        "Too few overlapping samples for ",
+        race1,
+        " vs ",
+        race2,
+        ": ",
+        length(common_samples)
+      )
+      return(tibble())
+    }
+    
+    abund_sub <- abund_df[, common_samples, drop = FALSE]
+    meta_df <- meta_df[common_samples, , drop = FALSE]
+    
+    cat("\nRace distribution:\n")
+    print(table(meta_df$race))
+    
+    cat("\nBioProject distribution:\n")
+    print(table(meta_df$bioproject))
+    
+    cat("\nRace by BioProject:\n")
+    print(table(meta_df$bioproject, meta_df$race))
+    
+    outdir <- file.path(
+      main_output_dir,
+      paste0("maaslin_RANDOM_", race1, "_vs_", race2)
+    )
+    
+    Maaslin2(
+      input_data      = abund_sub,
+      input_metadata  = meta_df,
+      output          = outdir,
+      fixed_effects   = c("race"),
+      random_effects  = c("bioproject"),
+      reference       = c(paste0("race,", race2)),
+      normalization   = "NONE",
+      transform       = "LOG",
+      analysis_method = "LM",
+      correction      = "BH",
+      standardize     = FALSE
+    )
+    
+    res_file <- file.path(outdir, "all_results.tsv")
+    
+    if (!file.exists(res_file)) {
+      warning("Results file not found for ", race1, " vs ", race2)
+      return(tibble())
+    }
+    
+    res <- read_tsv(res_file, show_col_types = FALSE)
+    
+    out <- res %>%
+      filter(metadata == "race") %>%
+      transmute(
+        comparison = paste0(race1, "_vs_", race2),
+        race1 = race1,
+        race2 = race2,
+        taxon = feature,
+        effect = coef,
+        abs_effect = abs(coef),
+        p_value = pval,
+        q_value = qval,
+        significant_effect_cutoff = qval < 0.05 & abs(coef) >= 1,
+        direction = ifelse(
+          coef > 0,
+          paste0("enriched_in_", race1),
+          paste0("enriched_in_", race2)
+        )
+      )
+    
+    return(out)
+  }
+  
+    # 10) Run all analyses
+    results_long <- pmap_df(pairs, run_pair)
+  
+  write_csv(
+    results_long,
+    file.path(main_output_dir, "results_long_random_effect_all_taxa_effect_cutoff.csv")
+  )
+  
+  cat("\nSaved: results_long_random_effect_all_taxa_effect_cutoff.csv\n")
+  
+  # 11) Read core annotations
+  # Core is ONLY for interpretation, not filtering MaAsLin2
+    core_file <- "core_by_race.csv"
+  
+  if (file.exists(core_file)) {
+    
+    core <- read_csv(core_file, show_col_types = FALSE)
+    
+    if (!"taxon" %in% colnames(core)) {
+      stop("Column 'taxon' not found in core_by_race.csv")
+    }
+    
+    results_annotated <- results_long %>%
+      left_join(core, by = "taxon") %>%
+      mutate(
+        core_Asian = ifelse(is.na(core_Asian), 0, core_Asian),
+        core_African = ifelse(is.na(core_African), 0, core_African),
+        core_Caucasian = ifelse(is.na(core_Caucasian), 0, core_Caucasian),
+        core_Hispanic = ifelse(is.na(core_Hispanic), 0, core_Hispanic),
+        shared_core = ifelse(is.na(shared_core), 0, shared_core),
+        race_specific = ifelse(is.na(race_specific), "Not_specific", race_specific),
+        core_category = case_when(
+          shared_core == 1 ~ "Shared core",
+          race_specific != "Not_specific" ~ "Race-specific core",
+          TRUE ~ "Non-core"
+        )
+      )
+    
+    write_csv(
+      results_annotated,
+      file.path(main_output_dir, "results_long_random_effect_annotated_with_core_effect_cutoff.csv")
+    )
+    
+    cat("Saved: results_long_random_effect_annotated_with_core_effect_cutoff.csv\n")
+    
+  } else {
+    
+    results_annotated <- results_long %>%
+      mutate(
+        shared_core = 0,
+        race_specific = "Not_available",
+        core_category = "Core annotation not used"
+      )
+    
+    cat("core_by_race.csv not found. Continuing without core annotation.\n")
+  }
+  
+    # 12) Prepare results for plotting
+    res <- results_annotated %>%
+    filter(!is.na(q_value), !is.na(effect)) %>%
+    mutate(
+      minus_log10_q = -log10(pmax(q_value, 1e-300)),
+      
+      sig = q_value < 0.05 & abs(effect) >= 1,
+      
+      sig_group = case_when(
+        q_value < 0.05 & effect >= 1 ~ "Positive significant",
+        q_value < 0.05 & effect <= -1 ~ "Negative significant",
+        TRUE ~ "Not significant"
+      )
+    )
+  
+  write_csv(
+    res,
+    file.path(main_output_dir, "prepared_results_for_plots_effect_cutoff.csv")
+  )
+  
+  # PLOT 1: Volcano plot with q-value and effect-size cutoff
+  
+  p_volcano_color <- ggplot(
+    res,
+    aes(
+      x = effect,
+      y = minus_log10_q,
+      color = sig_group
+    )
+  ) +
+    geom_vline(
+      xintercept = -1,
+      linetype = "dashed",
+      linewidth = 0.4
+    ) +
+    geom_vline(
+      xintercept = 0,
+      linetype = "solid",
+      linewidth = 0.3
+    ) +
+    geom_vline(
+      xintercept = 1,
+      linetype = "dashed",
+      linewidth = 0.4
+    ) +
+    geom_hline(
+      yintercept = -log10(0.05),
+      linetype = "dotted",
+      linewidth = 0.4
+    ) +
+    geom_point(
+      aes(shape = core_category),
+      size = 2.2,
+      alpha = 0.8
+    ) +
+    facet_wrap(~ comparison, scales = "free") +
+    scale_color_manual(
+      values = c(
+        "Positive significant" = "#D55E00",
+        "Negative significant" = "#0072B2",
+        "Not significant" = "grey70"
+      )
+    ) +
+    labs(
+      title = "Pairwise race-associated microbial differences",
+      subtitle = "Significance: q < 0.05 and |effect size| >= 1; random-effects MaAsLin2 model",
+      x = "Effect size coefficient",
+      y = "-log10(q-value)",
+      color = "Association",
+      shape = "Core category"
+    ) +
+    theme_bw(base_size = 12) +
+    theme(
+      strip.text = element_text(face = "bold", size = 10),
+      plot.title = element_text(face = "bold", size = 14),
+      plot.subtitle = element_text(size = 10),
+      legend.position = "bottom",
+      panel.grid.minor = element_blank()
+  
+    )
+  ggsave(
+    file.path(main_output_dir, "FIG_volcano_random_effect_6panel_effect_cutoff.png"),
+    plot = p_volcano_color,
+    width = 14,
+    height = 9,
+    dpi = 300
+  )
+  
+  ggsave(
+    file.path(main_output_dir, "FIG_volcano_random_effect_6panel_effect_cutoff.pdf"),
+    plot = p_volcano_color,
+    width = 14,
+    height = 9,
+    device = "pdf"
+  )
+  
+  p_volcano_color
+  # PLOT 2: TOP 50 SIGNIFICANT TAXA PER COMPARISON
+  # q < 0.05 and |effect| >= 1  
+  
+  topN <- 50
+  
+  top_sig <- res %>%
+    dplyr::filter(sig) %>%
+    dplyr::group_by(comparison) %>%
+    dplyr::arrange(q_value) %>%
+    dplyr::slice_head(n = topN) %>%
+    dplyr::ungroup() %>%
+    dplyr::mutate(
+      taxon_plot = stringr::str_trunc(taxon, 50),
+      enrich_group = ifelse(effect > 0, race1, race2)
+    )
+  
+  write_csv(
+    top_sig,
+    file.path(main_output_dir, "top50_significant_taxa_q005_effect1.csv")
+  )
+  
+  p_top_color <- ggplot(
+    top_sig,
+    aes(
+      x = effect,
+      y = forcats::fct_reorder(taxon_plot, effect),
+      color = enrich_group
+    )
+  ) +
+    geom_vline(xintercept = 0, linetype = "dashed", linewidth = 0.4) +
+    geom_point(aes(shape = factor(shared_core)), size = 2.8, alpha = 0.9) +
+    facet_wrap(~ comparison, scales = "free_y") +
+    scale_shape_manual(values = c("0" = 16, "1" = 17)) +
+    labs(
+      title = paste0("Top ", topN, " significant taxa per comparison"),
+      subtitle = "Significant taxa defined as q < 0.05 and |effect size| >= 1",
+      x = "Effect size coefficient",
+      y = "Taxon",
+      color = "Enriched in",
+      shape = "Shared core"
+    ) +
+    theme_bw(base_size = 12) +
+    theme(
+      strip.text = element_text(face = "bold", size = 10),
+      axis.text.y = element_text(size = 7),
+      plot.title = element_text(face = "bold", size = 14),
+      plot.subtitle = element_text(size = 10),
+      legend.position = "bottom",
+      panel.grid.minor = element_blank()
+    )
+  
+  ggsave(
+    file.path(main_output_dir, "FIG_top50_significant_taxa_random_effect_effect_cutoff.png"),
+    plot = p_top_color,
+    width = 15,
+    height = 10,
+    dpi = 300
+  )
+  
+  ggsave(
+    file.path(main_output_dir, "FIG_top50_significant_taxa_random_effect_effect_cutoff.pdf"),
+    plot = p_top_color,
+    width = 15,
+    height = 10,
+    device = "pdf"
+  )
+  
+  p_top_color
+  
+  # PLOT 3: TESTED VS SIGNIFICANT TAXA PER COMPARISON
+  # Significant = q < 0.05 and |effect| >= 1
+    
+  sig_count <- res %>%
+    dplyr::group_by(comparison) %>%
+    dplyr::summarise(
+      tested_taxa = dplyr::n(),
+      q_only_significant_taxa = sum(q_value < 0.05, na.rm = TRUE),
+      significant_taxa_effect_cutoff = sum(q_value < 0.05 & abs(effect) >= 1, na.rm = TRUE),
+      .groups = "drop"
+    )
+  
+  write_csv(
+    sig_count,
+    file.path(main_output_dir, "tested_vs_significant_taxa_summary_effect_cutoff_wide.csv")
+  )
+  
+  sig_count_long <- sig_count %>%
+    tidyr::pivot_longer(
+      cols = c(tested_taxa, q_only_significant_taxa, significant_taxa_effect_cutoff),
+      names_to = "category",
+      values_to = "taxa_count"
+    ) %>%
+    dplyr::mutate(
+      category = dplyr::case_when(
+        category == "tested_taxa" ~ "Tested taxa",
+        category == "q_only_significant_taxa" ~ "q < 0.05 only",
+        category == "significant_taxa_effect_cutoff" ~ "q < 0.05 and |effect| >= 1",
+        TRUE ~ category
+      )
+    )
+  
+  write_csv(
+    sig_count_long,
+    file.path(main_output_dir, "tested_vs_significant_taxa_summary_effect_cutoff_long.csv")
+  )
+  
+  p_bar <- ggplot(
+    sig_count_long,
+    aes(
+      x = comparison,
+      y = taxa_count,
+      fill = category
+    )
+  ) +
+    geom_col(
+      position = position_dodge(width = 0.8),
+      width = 0.7
+    ) +
+    geom_text(
+      aes(label = taxa_count),
+      position = position_dodge(width = 0.8),
+      hjust = -0.2,
+      size = 3.5
+    ) +
+    coord_flip() +
+    scale_y_continuous(
+      expand = expansion(mult = c(0, 0.12))
+    ) +
+    labs(
+      title = "Tested versus significant taxa in each pairwise comparison",
+      subtitle = "Comparison of tested taxa, q-value-only significance, and effect-size-filtered significance",
+      x = "Comparison",
+      y = "Number of taxa",
+      fill = "Category"
+    ) +
+    theme_bw(base_size = 12) +
+    theme(
+      plot.title = element_text(face = "bold"),
+      plot.subtitle = element_text(size = 10),
+      legend.position = "bottom"
+    )
+  ggsave(
+    file.path(main_output_dir, "FIG_tested_vs_significant_taxa_barplot_effect_cutoff(1).png"),
+    plot = p_bar,
+    width = 10,
+    height = 6,
+    dpi = 300
+  )
+  
+  ggsave(
+    file.path(main_output_dir, "FIG_tested_vs_significant_taxa_barplot_effect_cutoff(1).pdf"),
+    plot = p_bar,
+    width = 10,
+    height = 6,
+    device = "pdf"
+  )
+  
+  p_bar
+
+  # COMBINED MULTI-PANEL FIGURE
+  
+  library(patchwork)
+  
+  # Adjust legends for cleaner combined layout
+  p_volcano_combined <- p_volcano_color +
+    theme(
+      legend.position = "bottom",
+      plot.title = element_text(size = 13)
+    )
+  
+  p_top_combined <- p_top_color +
+    theme(
+      legend.position = "bottom",
+      plot.title = element_text(size = 13)
+    )
+  
+  p_bar_combined <- p_bar +
+    theme(
+      legend.position = "bottom",
+      plot.title = element_text(size = 13)
+    )
+  
+   # Combine plots
+ 
+  combined_plot <-
+    (
+      p_volcano_combined
+      /
+        p_top_combined
+      /
+        p_bar_combined
+    ) +
+    plot_annotation(
+      title = "Differential abundance analysis across racial groups",
+      subtitle = paste(
+        "Random-effects MaAsLin2 model;",
+        "Significance defined as q < 0.05 and |effect size| >= 1"
+      ),
+      theme = theme(
+        plot.title = element_text(
+          face = "bold",
+          size = 18,
+          hjust = 0.5
+        ),
+        plot.subtitle = element_text(
+          size = 12,
+          hjust = 0.5
+        )
+      )
+    )
+  
+  # Save combined figure
+  
+  ggsave(
+    file.path(
+      main_output_dir,
+      "FIG_combined_differential_abundance_summary.png"
+    ),
+    plot = combined_plot,
+    width = 18,
+    height = 26,
+    dpi = 300
+  )
+  
+  ggsave(
+    file.path(
+      main_output_dir,
+      "FIG_combined_differential_abundance_summary.pdf"
+    ),
+    plot = combined_plot,
+    width = 18,
+    height = 26,
+    device = "pdf"
+  )
+  
+  combined_plot
+    
+# FINAL SUMMARY
+  
+  cat("\n================ FINAL SUMMARY ================\n")
+  
+  cat(
+    "Total associations tested:",
+    nrow(results_long),
+    "\n"
+  )
+  
+  cat(
+    "Significant associations q < 0.05 only:",
+    sum(results_long$q_value < 0.05, na.rm = TRUE),
+    "\n"
+  )
+  
+  cat(
+    "Significant associations q < 0.05 and |effect size| >= 1:",
+    sum(results_long$q_value < 0.05 & abs(results_long$effect) >= 1, na.rm = TRUE),
+    "\n"
+  )
+  
+  sig_summary <- results_long %>%
+    mutate(
+      significant_q_only = q_value < 0.05,
+      significant_effect_cutoff = q_value < 0.05 & abs(effect) >= 1
+    ) %>%
+    group_by(comparison) %>%
+    summarise(
+      total_tested = n(),
+      significant_q_only = sum(significant_q_only, na.rm = TRUE),
+      significant_effect_cutoff = sum(significant_effect_cutoff, na.rm = TRUE),
+      .groups = "drop"
+    )
+  
+  print(sig_summary)
+  
+  write_csv(
+    sig_summary,
+    file.path(main_output_dir, "final_significant_summary_random_effect_effect_cutoff.csv")
+  )
+  
+  cat("\nAll files saved successfully in:\n")
+  cat(main_output_dir)
+
+
+

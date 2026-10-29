@@ -1,0 +1,131 @@
+UPSET Plot
+
+# Load libraries
+library(tidyverse)
+library(ComplexUpset)
+
+# Set working directory
+setwd("C:/Users/shiva/OneDrive/Desktop/G-INS-P/UPSET")
+
+# Load data
+data <- read.csv("Upset_plot.csv", header = TRUE, stringsAsFactors = FALSE)
+
+# Clean column names
+colnames(data) <- c("Accession", "Race", "Core_Taxa")
+
+# Clean Race labels
+data <- data %>%
+  mutate(
+    Race = trimws(Race),
+    Race = factor(Race, levels = c("African", "Asian", "Caucasian", "Hispanic"))
+  )
+
+# Sanity check
+unique(data$Race)
+
+# Convert taxa list to long format
+data_long <- data %>%
+  separate_rows(Core_Taxa, sep = ",") %>%
+  mutate(Core_Taxa = trimws(Core_Taxa))
+
+core_taxa_keep <- data_long %>%
+  group_by(Core_Taxa) %>%
+  summarise(n_studies = n_distinct(Accession), .groups = "drop") %>%
+  filter(n_studies >= 2) %>%
+  pull(Core_Taxa)
+
+# Keep only filtered taxa (n_studies NOT retained)
+data_filtered <- data_long %>%
+  filter(Core_Taxa %in% core_taxa_keep)
+
+# Create presence–absence matrix (Studies as sets)
+data_wide <- data_filtered %>%
+  mutate(value = 1) %>%
+  pivot_wider(
+    names_from = Accession,
+    values_from = value,
+    values_fill = 0
+  ) %>%
+  as.data.frame()
+
+# Define set columns (EXPLICIT)
+set_cols <- colnames(data_wide)[
+  !colnames(data_wide) %in% c("Race", "Core_Taxa")
+]
+
+# UpSet Plot 1: Core intersections across studies
+upset_plot_clean <- upset(
+  data_wide,
+  set_cols,
+  name = "Studies",
+  min_size = 2,
+  n_intersections = 20,
+  base_annotations = list(
+    "Intersection size" = intersection_size(
+      text = list(size = 3)
+    ) +
+      labs(title = "Intersection of Core Microbiome Across Studies") +
+      scale_y_continuous(expand = c(0, 0))
+  ),
+  themes = upset_modify_themes(
+    list(
+      "intersections_matrix" = theme(
+        panel.grid = element_blank(),
+        axis.text.x = element_blank()
+      ),
+      "overall_sizes" = theme(
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 8)
+      )
+    )
+  )
+) +
+  theme(
+    plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+    plot.background = element_rect(fill = "white"),
+    panel.background = element_rect(fill = "white")
+  )
+
+# Save Plot 1
+ggsave(
+  "Upset_CoreMicrobiome_properClean(1).png",
+  plot = upset_plot_clean,
+  width = 14,
+  height = 9,
+  dpi = 300
+)
+
+# UpSet Plot 2: Race-colored intersections
+upset_plot_race <- upset(
+  data_wide,
+  set_cols,
+  name = "Studies",
+  min_size = 2,
+  n_intersections = 20,
+  base_annotations = list(
+    "Intersection size" = intersection_size(
+      mapping = aes(fill = Race),
+      text = list(size = 3)
+    ) +
+      scale_fill_brewer(palette = "Set2") +
+      labs(title = "Intersection of Core Microbiome by Race")
+  )
+) +
+  theme(
+    plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+    plot.background = element_rect(fill = "white"),
+    panel.background = element_rect(fill = "white")
+  )
+
+# Save Plot 2
+ggsave(
+  "Upset_CoreMicrobiome_byRace_properClean(2).png",
+  plot = upset_plot_race,
+  width = 14,
+  height = 9,
+  dpi = 300
+)
+
+# Display plots
+print(upset_plot_clean)
+print(upset_plot_race)
+

@@ -1,0 +1,104 @@
+Venn Diagram
+
+# Set working directory
+setwd("C:/Users/shiva/OneDrive/Desktop/G-INS-P/Additional venn diagrams")
+list.files()
+
+# Load and clean data
+data <- read.csv("Asian_comparison.csv", header = TRUE, stringsAsFactors = FALSE)
+
+data_clean <- data %>%
+  mutate(Accession.No. = strsplit(Accession.No., " \\+ ")) %>%   # split by ' + '
+  unnest(Accession.No.)
+
+# Create Venn list
+venn_data <- split(data_clean$Taxa, data_clean$Accession.No.)
+
+# Check structure
+str(venn_data)
+
+# Create Venn plot and assign to variable
+venn_plot <- ggvenn(
+  venn_data,
+  fill_color = c("#F1C40F", "#FF33A8", "#33FFF0")[1:length(venn_data)],
+  stroke_size = 0.8,
+  set_name_size = 5,
+  text_size = 5
+) +
+  theme_void() +
+  theme(
+    plot.background = element_rect(fill = "white", color = NA),
+    panel.background = element_rect(fill = "white", color = NA)
+  )
+
+# Display plot
+print(venn_plot)
+
+# Save plot as PDF
+ggsave(
+  "Asian_comparison4.pdf",
+  plot = venn_plot,  # <- must use the variable storing the plot
+  width = 8,
+  height = 6,
+  device = "pdf",
+  bg = "white"
+)
+
+
+
+
+For Specific Biproject
+
+# Install packages (run once)
+install.packages(c("tidyverse", "ggvenn"))
+
+# Load libraries
+library(tidyverse)
+library(ggvenn)
+
+# Set working directory
+setwd("C:/Users/shiva/OneDrive/Desktop/G-INS-P/Additional studies")
+
+# Read data
+data <- read.csv("PRJNA386260_venn.csv",
+                 header = TRUE,
+                 stringsAsFactors = FALSE)
+
+# Clean and expand race combinations
+data_clean <- data %>%
+  mutate(Race = strsplit(Race, " \\+ ")) %>%   # split by " + "
+  unnest(Race)
+
+# Create list for Venn
+venn_data <- split(data_clean$Taxa, data_clean$Race)
+
+# Check structure (important sanity check)
+str(venn_data)
+
+# Plot Venn diagram (COUNTS ONLY — correct practice)
+venn_plot <- ggvenn(
+  venn_data,
+  fill_color = c("#FFB3BA", "#BAE1FF", "#BAFFC9", "#FFEBAF"), # new colors
+  fill_alpha = 0.5,
+  stroke_size = 0.8,
+  set_name_size = 5,
+  text_size = 5
+) +
+  theme_void() +   # clean white background
+  theme(
+    plot.background = element_rect(fill = "white", color = NA),
+    panel.background = element_rect(fill = "white", color = NA)
+  )
+
+# Display plot
+print(venn_plot)
+
+# Save high-resolution image
+ggsave(
+  "PRJNA386260_VennDiagram_FINAL2.pdf",  # save as PDF
+  plot = venn_plot,
+  width = 8,
+  height = 6,
+  device = "pdf",   # explicitly specify PDF device
+  bg = "white"
+)
